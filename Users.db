@@ -1,0 +1,3 @@
+{"fullName":"Nayer User","email":"nayeruser@test.co","password":"$2a$12$ZA82yuLHOW5/W3LwK6DRM.1P68F7kAr5iZovPCiuNvfGksDfyIh0K","role":"user","active":true,"isBan":false,"_id":"OGIimbkH53kDMwM2"}
+{"fullName":"Nayer Admin","email":"nayer@test.co","password":"$2a$12$cQWii4.MAR.llYxVGE0HQuf7UlEbAw2w4WQRqyF4SqQNmzDI8P/Kq","role":"admin","active":true,"isBan":false,"_id":"QZsfyH9WCtKfqHMi"}
+{"fullName":"Kero User2","email":"kero@test.co","password":"$2a$12$EJo94DUxqXrN9KTyAAoHBOV4zxjh/cI7DbWqN0o.fGqo3etSHHfyi","role":"user","active":true,"isBan":false,"_id":"m20VipltYLqbmeon"}
