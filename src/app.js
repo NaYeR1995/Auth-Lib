@@ -4,34 +4,76 @@ import dotenv from "dotenv";
 import Datastore from "nedb-promises";
 import asyncHandler from "express-async-handler";
 import jwt from "jsonwebtoken";
-
+import cookieParser from "cookie-parser";
 dotenv.config();
 const User = Datastore.create("Users.db");
 
 const app = express();
+app.use(cookieParser());
 app.use(express.json());
 
-// Middleware to authenticate user (to be implemented)
-const authen = (req, res, next) => {
-  const authorizationHeader = req.headers.authorization;
+// Middleware to Authentication user (to be implemented)
+const Authentication = (req, res, next) => {
+  const accessToken = req.cookies.accessToken;
 
-  if (!authorizationHeader) {
+  if (!accessToken) {
     return res.status(401).json({ message: "Access token not found" });
-  }
-  const token = authorizationHeader.split(" ")[1];
-
-  if (!token) {
-    return res.status(401).json({ message: "Access token is missing" });
   }
 
   try {
-    const decoded = jwt.verify(token, process.env.SKeyForAT);
-    req.user = { id: decoded.userId, Role:decoded.role };
-    next();
+    // Attempt to verify the access token
+    const decodedUser = jwt.verify(accessToken, process.env.SKeyForAT);
+    req.user = decodedUser; // Attach user info to request
+
+    return next(); // Token is valid, proceed to the next middleware
   } catch (error) {
+    // If token expired, attempt to refresh it
+    if (error.name === 'TokenExpiredError') {
+      return refreshTokenMiddleware(req, res); // Refresh token and proceed
+    }
     return res.status(401).json({ message: "Invalid or expired token" });
   }
 };
+
+
+const Authorization = asyncHandler(async (req, res, next) => {
+  const authUser = req.user;
+  try {
+    if (authUser.Role !== "admin") {
+      res.status(401).json({ message: "Unauthorized Account" });
+    }
+    next();
+  } catch {
+    return res.status(401).json({ message: "Access token not found" });
+  }
+});
+
+// Middleware to Authentication user (to be implemented)
+const refreshTokenMiddleware = (req, res) => {
+  const refreshToken = req.cookies.refreshToken;
+
+  if (!refreshToken) {
+    return res.status(401).json({ message: "Refresh token not found" });
+  }
+
+  try {
+    // Verify the refresh token
+    const decoded = jwt.verify(refreshToken, process.env.SKeyForRT);
+
+    // Generate new tokens
+    const { accessToken } = generateToken({
+      userId: decoded.userId,
+      Role: decoded.Role,
+    });
+
+    // Set new tokens in cookies
+    setCookies(res, accessToken);
+    res.status(200).json({ message: "Access token refreshed" });
+  } catch (error) {
+    return res.status(401).json({ message: "Invalid or expired refresh token" });
+  }
+};
+
 
 const generateToken = (data) => {
   const accessToken = jwt.sign(data, process.env.SKeyForAT, {
@@ -42,6 +84,31 @@ const generateToken = (data) => {
     expiresIn: process.env.ExpireRT,
   });
   return { accessToken, refreshToken };
+};
+
+const setCookies = (res, accessToken, refreshToken = null) => {
+  // Set accessToken cookie
+  res.cookie("accessToken", accessToken, {
+    httpOnly: true, // Makes the cookie inaccessible via JavaScript (prevents XSS attacks)
+    secure: process.env.NODE_ENV === "production", // Set to true only in production (if using https)
+    maxAge: 7 * 60 * 1000, // 7 mins in milliseconds
+    sameSite: "Strict", // Prevents sending cookies with cross-site requests (for CSRF protection)
+  });
+
+  // If the refreshToken is not provided, you can handle it (for example, logging or sending a specific message).
+  if (refreshToken) {
+    // Set refreshToken cookie if it exists
+    res.cookie("refreshToken", refreshToken, {
+      httpOnly: true, // Makes the cookie inaccessible via JavaScript (prevents XSS attacks)
+      secure: process.env.NODE_ENV === "production", // Set to true only in production (if using https)
+      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days in milliseconds
+      sameSite: "Strict", // Prevents sending cookies with cross-site requests (for CSRF protection)
+    });
+  } else {
+    // Optionally log or handle the case when refreshToken is not provided
+    console.log("No refreshToken provided");
+    // You could also send a message back, or just not do anything
+  }
 };
 
 // Default Route
@@ -128,24 +195,24 @@ app.post(
       Role: user.role,
     });
 
+    setCookies(res, accessToken, refreshToken);
+
     res.status(200).json({
       message: "Login has been done successfully!",
       id: user._id,
       FullName: user.fullName,
       Email: user.email,
-      Role: user.role
+      Role: user.role,
     });
-    console.log(accessToken)
-    console.log(refreshToken)
   })
 );
 
-// CRUD Auth checking
+// get The user Info.
 app.get(
   "/api/v1/me",
-  authen,
+  Authentication,
   asyncHandler(async (req, res) => {
-    const user = await User.findOne({ _id: req.user.id });
+    const user = await User.findOne({ _id: req.user.userId });
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
@@ -153,25 +220,60 @@ app.get(
   })
 );
 
-app.post("/api/v1/refresh-token", asyncHandler(async (req, res) => {
-  const { refreshToken } = req.body;
+//is admin
+app.get(
+  "/api/v1/admin",
+  Authentication,
+  Authorization,
+  asyncHandler((req, res) => {
+    const user = req.user;
+    if (user) {
+      res.status(200).json({ message: `Your Role Is ${user.Role}` });
+    } else {
+      res
+        .status(404)
+        .json({ message: `Your Role Is isn't allowed to access this URL` });
+    }
+  })
+);
 
-  if (!refreshToken) {
-    return res.status(400).json({ message: "Refresh token is required" });
-  }
+//create a refreshToken
+app.post(
+  "/api/v1/refresh-token",
+  asyncHandler(async (req, res) => {
+    const { refreshToken } = req.cookies;
 
-  try {
-    const decoded = jwt.verify(refreshToken, process.env.SKeyForRT);
-    const { accessToken, refreshToken: newRefreshToken } = generateToken({
-      userId: decoded.userId,
-      Role: decoded.Role,
-    });
+    if (!refreshToken) {
+      return res.status(400).json({ message: "Refresh token is required" });
+    }
 
-    res.status(200).json({ accessToken, refreshToken: newRefreshToken });
-  } catch (err) {
-    res.status(401).json({ message: "Invalid refresh token" });
-  }
-}));
+    try {
+      const decoded = jwt.verify(refreshToken, process.env.SKeyForRT);
+      if (!decoded) {
+        res.status(401).json({ message: "Invalid refresh token" });
+      }
+      const { accessToken } = generateToken({
+        userId: decoded.userId,
+        Role: decoded.Role,
+      });
+      setCookies(res, accessToken);
+
+      res.status(200).json({ message: "Refresh token is Valid" });
+    } catch (err) {
+      res.status(401).json({ message: "Invalid refresh token" });
+    }
+  })
+);
+
+//logout
+app.post("/api/v1/logout", (req, res) => {
+  res.clearCookie("accessToken");
+  res.clearCookie("refreshToken");
+  res.json({ message: "Logged out successfully" });
+});
+//---------------------------------------------------------------//
+
+//---------------------------------------------------------------//
 
 // Server Setup
 const port = process.env.PORT || 5000;
