@@ -17,63 +17,61 @@ const Authentication = (req, res, next) => {
   const accessToken = req.cookies.accessToken;
 
   if (!accessToken) {
-    return res.status(401).json({ message: "Access token not found" });
+    return refreshTokenMiddleware(req, res, next); // Try to refresh token
   }
 
   try {
     // Attempt to verify the access token
-    const decodedUser = jwt.verify(accessToken, process.env.SKeyForAT);
-    req.user = decodedUser; // Attach user info to request
-
-    return next(); // Token is valid, proceed to the next middleware
+    const validUser = jwt.verify(accessToken, process.env.SKeyForAT);
+    req.user = validUser; // Store user info for use in next middleware
+    next(); // Token is valid, proceed to the next middleware
   } catch (error) {
-    // If token expired, attempt to refresh it
-    if (error.name === 'TokenExpiredError') {
-      return refreshTokenMiddleware(req, res); // Refresh token and proceed
+    if (error.name === "TokenExpiredError") {
+      return refreshTokenMiddleware(req, res, next); // Try to refresh token
     }
     return res.status(401).json({ message: "Invalid or expired token" });
   }
 };
-
-
-const Authorization = asyncHandler(async (req, res, next) => {
-  const authUser = req.user;
-  try {
-    if (authUser.Role !== "admin") {
-      res.status(401).json({ message: "Unauthorized Account" });
-    }
-    next();
-  } catch {
-    return res.status(401).json({ message: "Access token not found" });
-  }
-});
-
-// Middleware to Authentication user (to be implemented)
-const refreshTokenMiddleware = (req, res) => {
+// Middleware to refresh Token user (to be implemented)
+const refreshTokenMiddleware = (req, res, next) => {
   const refreshToken = req.cookies.refreshToken;
 
   if (!refreshToken) {
-    return res.status(401).json({ message: "Refresh token not found" });
+    return res.status(404).json({ message: "You Must Login!" });
   }
 
   try {
-    // Verify the refresh token
     const decoded = jwt.verify(refreshToken, process.env.SKeyForRT);
-
-    // Generate new tokens
+    // Generate new access token
     const { accessToken } = generateToken({
       userId: decoded.userId,
-      Role: decoded.Role,
+      role: decoded.role,
     });
 
-    // Set new tokens in cookies
+    // Set new access token in cookies
     setCookies(res, accessToken);
-    res.status(200).json({ message: "Access token refreshed" });
+
+    req.user = { userId: decoded.userId, role: decoded.role };
+
+    next(); // Continue only if token refresh was successful
   } catch (error) {
-    return res.status(401).json({ message: "Invalid or expired refresh token" });
+    return res.status(401).json({ message: `You Must Login!` });
   }
 };
+// Middleware to Authorization user (to be implemented)
+const Authorization = asyncHandler(async (req, res, next) => {
+  const authUser = req.user;
 
+  if (!authUser) {
+    return res.status(401).json({ message: "Access token not found" });
+  }
+
+  if (authUser.role !== "admin") {
+    return res.status(403).json({ message: "Unauthorized Account" });
+  }
+
+  next();
+});
 
 const generateToken = (data) => {
   const accessToken = jwt.sign(data, process.env.SKeyForAT, {
@@ -106,10 +104,11 @@ const setCookies = (res, accessToken, refreshToken = null) => {
     });
   } else {
     // Optionally log or handle the case when refreshToken is not provided
-    console.log("No refreshToken provided");
+    console.log("No refreshToken created");
     // You could also send a message back, or just not do anything
   }
 };
+
 
 // Default Route
 app.get("/", (req, res) => {
@@ -151,7 +150,7 @@ app.post(
         id: newUser._id,
         FullName: newUser.fullName,
         Email: newUser.email,
-        Role: newUser.role,
+        role: newUser.role,
       });
     } catch (err) {
       res.status(500).json({ message: err });
@@ -192,7 +191,7 @@ app.post(
 
     const { accessToken, refreshToken } = generateToken({
       userId: user._id,
-      Role: user.role,
+      role: user.role,
     });
 
     setCookies(res, accessToken, refreshToken);
@@ -202,7 +201,7 @@ app.post(
       id: user._id,
       FullName: user.fullName,
       Email: user.email,
-      Role: user.role,
+      role: user.role,
     });
   })
 );
@@ -228,42 +227,19 @@ app.get(
   asyncHandler((req, res) => {
     const user = req.user;
     if (user) {
-      res.status(200).json({ message: `Your Role Is ${user.Role}` });
+      res.status(200).json({ message: `Your role Is ${user.role}` });
     } else {
       res
         .status(404)
-        .json({ message: `Your Role Is isn't allowed to access this URL` });
+        .json({ message: `Your role Is isn't allowed to access this URL` });
     }
   })
 );
 
 //create a refreshToken
-app.post(
-  "/api/v1/refresh-token",
-  asyncHandler(async (req, res) => {
-    const { refreshToken } = req.cookies;
-
-    if (!refreshToken) {
-      return res.status(400).json({ message: "Refresh token is required" });
-    }
-
-    try {
-      const decoded = jwt.verify(refreshToken, process.env.SKeyForRT);
-      if (!decoded) {
-        res.status(401).json({ message: "Invalid refresh token" });
-      }
-      const { accessToken } = generateToken({
-        userId: decoded.userId,
-        Role: decoded.Role,
-      });
-      setCookies(res, accessToken);
-
-      res.status(200).json({ message: "Refresh token is Valid" });
-    } catch (err) {
-      res.status(401).json({ message: "Invalid refresh token" });
-    }
-  })
-);
+app.post("/api/v1/refresh-token", refreshTokenMiddleware, (req, res) => {
+  res.status(200).json({ message: "Access token refreshed successfully!" });
+});
 
 //logout
 app.post("/api/v1/logout", (req, res) => {
@@ -277,6 +253,6 @@ app.post("/api/v1/logout", (req, res) => {
 
 // Server Setup
 const port = process.env.PORT || 5000;
-app.listen(port, () => {
+app.listen(port, (req, res) => {
   console.log(`Server running on port ${port}`);
 });
